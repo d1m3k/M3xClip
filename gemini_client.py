@@ -28,14 +28,18 @@ except ImportError:  # SDK belum terinstall — pesan errornya jelas di bawah
 
 # Model default. Ini nama model Gemini yang resmi dan masih aktif.
 # Kalau Google menggantinya di masa depan, ubah di config.json ("model").
-# Daftar kandidat dicoba BERURUTAN kalau model yang dipakai mengembalikan
-# 404 NOT_FOUND (model sudah tidak tersedia) — lihat _generate().
+# Daftar kandidat dicoba BERURUTAN kalau model yang dipakai tidak bisa
+# dipakai — lihat _generate(). Daftar ini DIVERIFIKASI lewat models.list
+# dengan key user (20 Nov 2026): "gemini-3-flash" TIDAK ada di daftar,
+# jadi tidak dipakai; 3.5-flash-lite dipilih karena kuotanya paling
+# longgar (500 req/hari di free tier).
 DEFAULT_MODEL = "gemini-3.8-flash"
 # Model yang sudah tidak diberikan ke akun/key baru (Nov 2026).
 # Jangan pernah dicoba PERTAMA — tetap ada di MODEL_CANDIDATES
 # sebagai usaha terakhir, siapa tahu akun lama masih bisa.
 KNOWN_DEAD_MODELS = {"gemini-2.5-flash"}
-MODEL_CANDIDATES = ["gemini-3.8-flash", "gemini-3-flash", "gemini-2.5-flash"]
+MODEL_CANDIDATES = ["gemini-3.8-flash", "gemini-3.5-flash-lite",
+                    "gemini-3.5-flash", "gemini-2.5-flash"]
 
 # Skema JSON yang diminta ke Gemini (supaya jawabannya rapi dan bisa diparse).
 MOMENTS_SCHEMA = {
@@ -96,11 +100,15 @@ class GeminiClient:
 
     # ------------------------------------------------------------------
     def _generate(self, **kwargs):
-        """Panggil generate_content, pindah ke model lain kalau modelnya 404.
+        """Panggil generate_content, pindah ke model lain kalau modelnya
+        tidak bisa dipakai saat ini.
 
-        Hanya error 404 NOT_FOUND (model tidak tersedia) yang memicu
-        pergantian model. Error lain (key salah = 401, kuota habis = 429,
-        dsb) langsung dilempar apa adanya — ganti model tidak membantu.
+        Pindah model HANYA untuk error yang mungkin hilang di model lain:
+        404 NOT_FOUND (model tidak tersedia), 503 UNAVAILABLE (model
+        sedang overload — sering sementara), 429 RESOURCE_EXHAUSTED
+        (kuota/rate limit model itu habis — limit dihitung per model).
+        Error lain (key salah = 401, dsb) langsung dilempar apa adanya —
+        ganti model tidak membantu.
         self.model selalu menunjuk model yang terakhir berhasil dipakai.
         """
         last_error = None
@@ -110,7 +118,7 @@ class GeminiClient:
                 self.model = m
                 return resp
             except Exception as e:  # noqa: BLE001 - dipilah di bawah
-                if _is_model_not_found(e):
+                if _bisa_coba_model_lain(e):
                     last_error = e
                     continue
                 raise
@@ -292,15 +300,21 @@ def _int_atau(nilai, default):
         return default
 
 
-def _is_model_not_found(e):
-    """True kalau error ini artinya 'model tidak tersedia' (404).
+def _bisa_coba_model_lain(e):
+    """True kalau error ini mungkin hilang dengan ganti model.
 
-    Google mengembalikan 404 NOT_FOUND saat model sudah dipensiunkan
-    atau tidak diberikan ke akun ini — persis yang terjadi pada
-    gemini-2.5-flash untuk user baru (Nov 2026).
+    - 404 NOT_FOUND: model sudah dipensiunkan atau tidak diberikan ke
+      akun ini — persis yang terjadi pada gemini-2.5-flash untuk user
+      baru (Nov 2026).
+    - 503 UNAVAILABLE: model sedang overload ("high demand") — biasanya
+      sementara; model lain sering masih menjawab.
+    - 429 RESOURCE_EXHAUSTED: kuota/rate limit model itu habis — limit
+      dihitung per model, jadi model lain bisa masih punya jatah.
     """
     msg = str(e)
-    return "404" in msg and "NOT_FOUND" in msg
+    return (("404" in msg and "NOT_FOUND" in msg)
+            or ("503" in msg and "UNAVAILABLE" in msg)
+            or ("429" in msg and "RESOURCE_EXHAUSTED" in msg))
 
 
 def _singkat_error(e):
