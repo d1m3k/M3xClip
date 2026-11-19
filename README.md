@@ -75,8 +75,17 @@ Kalau tidak ada, .exe tetap jalan asal ffmpeg terinstall di PATH.
      sendiri (x, y, w, h relatif 0.0–1.0, lihat frame video).
 3. Isi **API key** (sekali saja, tersimpan di `config.json`).
 4. Atur **jumlah momen** (default 3) dan **durasi clip** (default 30–60 detik).
-5. Pilih **folder output**, klik **Jalankan**, pantau log.
-6. Hasil: `{slug}_clip1.mp4`, `{slug}_clip2.mp4`, … + `{slug}_thumb1.jpg`, …
+5. Pilih **folder output**, klik **🔍 Cari Momen** — Gemini menonton video
+   lalu menampilkan daftar rekomendasi (judul, jam mulai–selesai, durasi,
+   alasan). **Centang** momen yang mau dipakai.
+6. Klik **✂️ Buat Clip yang Dipilih**. Untuk tiap momen yang dicentang,
+   yt-dlp download **hanya durasi momen itu** dari URL (bukan VOD utuh),
+   lalu clip dirakit + thumbnail dibuat. Pantau log.
+7. Hasil: `{slug}_clip1.mp4`, `{slug}_clip2.mp4`, … + `{slug}_thumb1.jpg`, …
+
+Catatan: kalau satu model Gemini sedang overload (503) atau kuotanya habis
+(429), program otomatis pindah ke model lain (3.8-flash → 3.5-flash-lite →
+3.5-flash → 2.5-flash). Kalau semua model gagal, tunggu sebentar lalu coba lagi.
 
 ## Troubleshooting
 
@@ -84,8 +93,8 @@ Kalau tidak ada, .exe tetap jalan asal ffmpeg terinstall di PATH.
 |---|---|
 | `API key belum diisi` | Isi key di GUI, klik Simpan. Key dibuat di AI Studio, bukan dikirim ke siapa pun. |
 | `Koneksi gagal` / 400 | Key salah / belum aktif. Cek di AI Studio, buat key baru. |
-| `Kuota habis` (429) | Free tier 8 jam video/hari tercapai. Tunggu reset besok. |
-| Video tidak ada subtitle | Video itu tidak punya auto-subtitle. Clip tetap jadi, tanpa subtitle. (Rencana v1.1: subtitle via Whisper, opsional.) |
+| `Kuota habis` (429) | Free tier model itu habis. Program otomatis pindah ke model lain; kalau semua model habis, tunggu reset besok. |
+| Video tidak ada subtitle | Video itu tidak punya auto-subtitle. Clip tetap jadi, tanpa subtitle. (Rencana: subtitle via Whisper, opsional.) |
 | VOD privat / dihapus | yt-dlp tidak bisa akses. Pakai VOD publik. |
 | `ffmpeg tidak ditemukan` | Install ffmpeg ke PATH, atau taruh `ffmpeg.exe` di folder `tools/`. |
 | Facecam kepotong / salah posisi | Preset Speed/Kai belum terverifikasi. Lihat satu frame video, ukur posisi facecam, isi lewat preset **Custom**. |
