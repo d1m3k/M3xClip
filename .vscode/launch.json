@@ -1,0 +1,15 @@
+{
+  // Konfigurasi debug untuk M3xClip — tekan F5 saat main.py terbuka,
+  // GUI akan jalan dan kamu bisa pasang breakpoint di baris mana pun.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "M3xClip (GUI)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}

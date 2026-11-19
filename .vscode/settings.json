@@ -1,0 +1,5 @@
+{
+  // Interpreter Python yang dipakai VSCode = venv di dalam folder proyek ini.
+  // Venv dibuat otomatis saat run.bat / build.bat pertama kali dijalankan.
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe"
+}
