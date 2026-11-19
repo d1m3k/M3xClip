@@ -6,7 +6,9 @@ Cara kerja (resmi dari Google, tanpa download video):
   videonya di server Google, lalu mengembalikan daftar momen
   dalam format JSON.
 
-Model default: gemini-2.5-flash (murah, cukup untuk tugas ini).
+Model default: gemini-3.8-flash (per 20 Nov 2026).
+DULU gemini-2.5-flash — Google sudah tidak memberikannya ke user baru
+(API mengembalikan 404 NOT_FOUND dan menyuruh pakai gemini-3.8-flash).
 Model bisa diganti lewat config.json ("model").
 
 PENTING: file ini TIDAK PERNAH menyimpan atau mencetak API key.
@@ -26,7 +28,10 @@ except ImportError:  # SDK belum terinstall — pesan errornya jelas di bawah
 
 # Model default. Ini nama model Gemini yang resmi dan masih aktif.
 # Kalau Google menggantinya di masa depan, ubah di config.json ("model").
-DEFAULT_MODEL = "gemini-2.5-flash"
+# Daftar kandidat dicoba BERURUTAN kalau model yang dipakai mengembalikan
+# 404 NOT_FOUND (model sudah tidak tersedia) — lihat _generate().
+DEFAULT_MODEL = "gemini-3.8-flash"
+MODEL_CANDIDATES = ["gemini-3.8-flash", "gemini-3-flash", "gemini-2.5-flash"]
 
 # Skema JSON yang diminta ke Gemini (supaya jawabannya rapi dan bisa diparse).
 MOMENTS_SCHEMA = {
@@ -72,7 +77,34 @@ class GeminiClient:
             )
         self._api_key = str(api_key).strip()
         self.model = model or DEFAULT_MODEL
+        # Urutan coba: model dari config dulu, lalu kandidat lain.
+        self._models = []
+        for m in [self.model] + MODEL_CANDIDATES:
+            if m and m not in self._models:
+                self._models.append(m)
         self._client = genai.Client(api_key=self._api_key)
+
+    # ------------------------------------------------------------------
+    def _generate(self, **kwargs):
+        """Panggil generate_content, pindah ke model lain kalau modelnya 404.
+
+        Hanya error 404 NOT_FOUND (model tidak tersedia) yang memicu
+        pergantian model. Error lain (key salah = 401, kuota habis = 429,
+        dsb) langsung dilempar apa adanya — ganti model tidak membantu.
+        self.model selalu menunjuk model yang terakhir berhasil dipakai.
+        """
+        last_error = None
+        for m in self._models:
+            try:
+                resp = self._client.models.generate_content(model=m, **kwargs)
+                self.model = m
+                return resp
+            except Exception as e:  # noqa: BLE001 - dipilah di bawah
+                if _is_model_not_found(e):
+                    last_error = e
+                    continue
+                raise
+        raise last_error
 
     # ------------------------------------------------------------------
     def test_connection(self):
@@ -82,8 +114,7 @@ class GeminiClient:
         Pesan tidak pernah berisi API key.
         """
         try:
-            resp = self._client.models.generate_content(
-                model=self.model,
+            resp = self._generate(
                 contents="Balas persis dengan kata: OK",
             )
             teks = (resp.text or "").strip()
@@ -134,8 +165,7 @@ class GeminiClient:
         # Cara resmi video understanding: URL YouTube sebagai file_uri.
         video_part = types.Part.from_uri(file_uri=video_url, mime_type="video/mp4")
 
-        resp = self._client.models.generate_content(
-            model=self.model,
+        resp = self._generate(
             contents=[video_part, prompt],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -250,6 +280,17 @@ def _int_atau(nilai, default):
         return int(nilai)
     except (TypeError, ValueError):
         return default
+
+
+def _is_model_not_found(e):
+    """True kalau error ini artinya 'model tidak tersedia' (404).
+
+    Google mengembalikan 404 NOT_FOUND saat model sudah dipensiunkan
+    atau tidak diberikan ke akun ini — persis yang terjadi pada
+    gemini-2.5-flash untuk user baru (Nov 2026).
+    """
+    msg = str(e)
+    return "404" in msg and "NOT_FOUND" in msg
 
 
 def _singkat_error(e):
