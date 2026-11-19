@@ -80,12 +80,18 @@ Kalau tidak ada, .exe tetap jalan asal ffmpeg terinstall di PATH.
    alasan). **Centang** momen yang mau dipakai.
 6. **Edit tipis** (sebelum render): atur ukuran subtitle (Kecil/Sedang/Besar),
    Sound (Mati/Minimal/Ramai) dan Stiker (Mati/Otomatis); geser trim
-   mulai/selesai tiap momen kalau mau. Klik **👁 Preview** untuk lihat
-   hasilnya dulu (render cepat 540x960, langsung dibuka di video player).
-7. Klik **✂️ Buat Clip yang Dipilih**. Untuk tiap momen yang dicentang,
-   yt-dlp download **hanya durasi momen itu** dari URL (bukan VOD utuh),
-   lalu clip dirakit + thumbnail dibuat. Pantau log.
-8. Hasil: `{slug}_clip1.mp4`, `{slug}_clip2.mp4`, … + `{slug}_thumb1.jpg`, …
+   mulai/selesai tiap momen kalau mau.
+7. Klik **👁 Preview** untuk membuka **Studio Preview** (v1.3): video
+   preview di dalam aplikasi (bisa di-play, ada slider + timeline),
+   tambah stiker lucu (HAHA!/WOW!/KOCAK!) atau sound effect
+   (pop/boing/ding) di detik yang dipilih — klik timeline untuk lompat,
+   lalu **✓ Render clip ini**. Edit manual dari timeline ikut masuk ke
+   hasil render (juga berlaku kalau nanti klik Buat Clip).
+8. Atau langsung klik **✂️ Buat Clip yang Dipilih** untuk render penuh
+   tanpa preview. Untuk tiap momen yang dicentang, yt-dlp download
+   **hanya durasi momen itu** dari URL (bukan VOD utuh), lalu clip
+   dirakit + thumbnail dibuat. Pantau log.
+9. Hasil: `{slug}_clip1.mp4`, `{slug}_clip2.mp4`, … + `{slug}_thumb1.jpg`, …
 
 **Gaya clip (v1.2, ala Short referensi):** subtitle kecil kuning ber-outline
 hitam di bawah area gameplay (tidak menutupi gameplay maupun facecam);

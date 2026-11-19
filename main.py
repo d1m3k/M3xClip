@@ -1,4 +1,4 @@
-"""M3xClip v1.2 — GUI untuk membuat clip Reels/Shorts dari VOD YouTube.
+"""M3xClip v1.3 — GUI untuk membuat clip Reels/Shorts dari VOD YouTube.
 
 Alur kerja 2 langkah (rekomendasi dulu, baru potong):
   LANGKAH 1 — klik "Cari Momen": ambil metadata VOD lewat yt-dlp,
@@ -6,7 +6,9 @@ Alur kerja 2 langkah (rekomendasi dulu, baru potong):
   daftar rekomendasi momen (judul, jam mulai-selesai, durasi, alasan).
   LANGKAH 2 — centang momen yang mau dipakai, atur edit tipis
   (ukuran subtitle, sound effect, stiker, trim mulai/selesai),
-  klik "Preview" untuk lihat hasilnya dulu, lalu klik
+  klik "👁 Preview" untuk membuka Studio Preview: video preview di
+  dalam aplikasi (bisa di-play) + timeline untuk nambah stiker lucu /
+  sound effect di detik yang dipilih — lalu Render. Atau langsung klik
   "Buat Clip yang Dipilih" untuk render penuh. Untuk tiap momen yang
   dicentang, yt-dlp download HANYA durasi momen itu dari URL
   (bukan VOD utuh) -> ambil auto-subtitle -> rakit clip vertikal
@@ -35,6 +37,7 @@ import assembler
 import downloader
 import gemini_client
 import presets
+import preview
 import sfx
 import stickers
 import subtitler
@@ -103,7 +106,7 @@ def _format_waktu(detik):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("M3xClip — Clip Generator Reels/Shorts v1.2")
+        self.title("M3xClip — Clip Generator Reels/Shorts v1.3")
         self.geometry("760x780")
         self.resizable(True, True)
 
@@ -117,6 +120,10 @@ class App(tk.Tk):
         self.momen_trim = []  # list (var_mulai, var_selesai) per momen
         self.meta_saat_ini = None
         self.slug_saat_ini = None
+        # Edit manual dari Studio Preview: {idx_momen: [edit, ...]}
+        self.edit_manual = {}
+        self._studio = None
+        self._studio_tmp = None
 
         self._bangun_ui()
         self._isi_dari_config()
@@ -552,7 +559,8 @@ class App(tk.Tk):
             momen = self.momen_list
             for idx in dipilih:
                 clip = self._proses_satu_momen(
-                    idx, momen[idx], url, facecam, out_dir, tmp_dir, slug, log=log)
+                    idx, momen[idx], url, facecam, out_dir, tmp_dir, slug, log=log,
+                    edit_manual=self.edit_manual.get(idx, []))
                 if clip:
                     berhasil += 1
 
@@ -571,59 +579,72 @@ class App(tk.Tk):
                 self.tombol_preview.configure(state="normal")
 
     def _proses_satu_momen(self, idx, m, url, facecam, out_dir, tmp_dir, slug,
-                           preview=False, log=None):
+                           preview=False, log=None, seg_path=None, srt_path=None,
+                           edit_manual=None):
         """Proses SATU momen: download segmen (durasi trim) -> subtitle ->
         SFX + stiker dari kata kocak -> rakit clip -> thumbnail.
         Kembalikan clip_path, atau None kalau gagal.
-        Dipakai Buat Clip (penuh) dan Preview (cepat, resolusi rendah)."""
+        Dipakai Buat Clip (penuh), Preview (cepat, resolusi rendah) dan
+        Render dari Studio Preview (seg_path/srt_path sudah ada).
+        edit_manual: list edit dari timeline Studio Preview."""
         log = log or self.log
         i = idx + 1
         # Trim dari spinbox (kalau ada), dijaga tetap masuk akal.
-        try:
-            mulai = int(self.momen_trim[idx][0].get())
-            selesai = int(self.momen_trim[idx][1].get())
-        except (IndexError, AttributeError, ValueError, tk.TclError):
-            mulai, selesai = m["start_sec"], m["end_sec"]
-        mulai = max(0, mulai)
-        selesai = max(mulai + 5, selesai)
+        mulai, selesai = self._trim_momen(idx, m)
         try:
             log("=== Momen %d: %s (%d-%d detik)%s ===" % (
                 i, m.get("title_id") or "?", mulai, selesai,
                 " [PREVIEW]" if preview else ""))
-            seg_base = os.path.join(tmp_dir, "seg%d" % i)
-            seg = downloader.download_section(url, mulai, selesai, seg_base, log=log)
+            if seg_path and os.path.isfile(seg_path):
+                seg = seg_path
+                log("  Segmen sudah ada (dari Studio Preview).")
+            else:
+                seg_base = os.path.join(tmp_dir, "seg%d" % i)
+                seg = downloader.download_section(url, mulai, selesai, seg_base, log=log)
 
-            srt, pesan_sub = subtitler.download_auto_subs(
-                url, mulai, selesai, tmp_dir, log=log)
-            if not srt:
-                log("  Subtitle: %s — lanjut TANPA subtitle." % pesan_sub)
+            srt = srt_path if (srt_path and os.path.isfile(srt_path)) else None
+            if srt is None:
+                srt, pesan_sub = subtitler.download_auto_subs(
+                    url, mulai, selesai, tmp_dir, log=log)
+                if not srt:
+                    log("  Subtitle: %s — lanjut TANPA subtitle." % pesan_sub)
 
             # SFX + stiker dari subtitle (baris berk kata kocak).
             mode_sfx = self.sfx_var.get()
             mode_stiker = self.stiker_var.get()
             jadwal = sfx.jadwal_dari_subtitle(srt, mode_sfx) if srt else []
+            # Edit manual dari Studio Preview (timeline) selalu menang.
+            for e in (edit_manual or []):
+                entri = {"waktu": e["waktu"], "manual": True}
+                if e["kind"] == "sfx":
+                    entri.update({"jenis": e["nilai"], "stiker": None})
+                else:
+                    entri.update({"jenis": None, "stiker": e["nilai"],
+                                  "sampai": e.get("sampai", e["waktu"] + 2.0)})
+                jadwal.append(entri)
             sfx_mix = None
-            if mode_sfx != "Mati" and any(j.get("jenis") for j in jadwal):
+            jadwal_sfx = [j for j in jadwal
+                          if j.get("jenis") and (j.get("manual") or mode_sfx != "Mati")]
+            if jadwal_sfx:
                 berkas_sfx = sfx.siapkan_sfx(os.path.join(tmp_dir, "sfx"))
                 sfx_mix = sfx.campur_jadwal(
-                    jadwal, berkas_sfx,
+                    jadwal_sfx, berkas_sfx,
                     os.path.join(tmp_dir, "mix%d.wav" % i), selesai - mulai)
                 if sfx_mix:
-                    log("  SFX: %d efek dicampur."
-                        % len([j for j in jadwal if j.get("jenis")]))
+                    log("  SFX: %d efek dicampur." % len(jadwal_sfx))
             stiker_jadwal = []
-            if mode_stiker == "Otomatis":
-                entri_stiker = [j for j in jadwal if j.get("stiker")]
-                if entri_stiker:
-                    berkas_stiker = stickers.siapkan_stiker(
-                        os.path.join(tmp_dir, "stiker"))
-                    for j in entri_stiker:
-                        stiker_jadwal.append({
-                            "path": berkas_stiker[j["stiker"]],
-                            "mulai": j["waktu"],
-                            "sampai": j.get("sampai", j["waktu"] + 2.0),
-                        })
-                    log("  Stiker: %d stiker." % len(stiker_jadwal))
+            entri_stiker = [j for j in jadwal
+                            if j.get("stiker") and (j.get("manual") or mode_stiker == "Otomatis")]
+            if entri_stiker:
+                berkas_stiker = stickers.siapkan_stiker(
+                    os.path.join(tmp_dir, "stiker"))
+                for j in entri_stiker:
+                    stiker_jadwal.append({
+                        "path": berkas_stiker[j["stiker"]],
+                        "mulai": j["waktu"],
+                        "sampai": j.get("sampai", j["waktu"] + 2.0),
+                    })
+                log("  Stiker: %d stiker." % len(stiker_jadwal))
 
             nama = ("preview_clip%d.mp4" % i) if preview else ("%s_clip%d.mp4" % (slug, i))
             clip_path = os.path.join(out_dir, nama)
@@ -660,7 +681,11 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     # Preview — render cepat (resolusi rendah) sebelum render penuh
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Studio Preview — video preview di dalam aplikasi + timeline edit
+    # ------------------------------------------------------------------
     def _klik_preview(self):
+        """Buka Studio Preview untuk momen pertama yang dicentang."""
         if self.sedang_jalan:
             return
         if not self.momen_list:
@@ -679,43 +704,144 @@ class App(tk.Tk):
         self.tombol_cari.configure(state="disabled")
         self.tombol_preview.configure(state="disabled")
         self.tombol_buat.configure(state="disabled")
-        self._set_status("Membuat preview (cepat, resolusi rendah)...")
-        threading.Thread(target=self._preview_thread, args=(dipilih[0],),
-                         daemon=True).start()
+        self._set_status("Menyiapkan Studio Preview...")
+        threading.Thread(target=self._siapkan_studio_thread,
+                         args=(dipilih[0],), daemon=True).start()
 
-    def _preview_thread(self, idx):
-        """Preview momen pertama yang dicentang, lalu buka di video player."""
+    def _facecam_saat_ini(self):
+        """Facecam dari preset/Custom saat ini (dipakai preview & render)."""
+        preset_nama = self.preset_var.get()
+        if preset_nama == "Custom":
+            try:
+                return {k: float(v.get())
+                        for k, (v, e) in self.custom_vars.items()}
+            except ValueError:
+                raise ValueError("Koordinat Custom harus angka 0.0-1.0.")
+        return presets.get_preset(preset_nama)
+
+    def _trim_momen(self, idx, m):
+        """Mulai/selesai momen dari spinbox trim (dijaga masuk akal)."""
+        try:
+            mulai = int(self.momen_trim[idx][0].get())
+            selesai = int(self.momen_trim[idx][1].get())
+        except (IndexError, AttributeError, ValueError, tk.TclError):
+            mulai, selesai = m["start_sec"], m["end_sec"]
+        mulai = max(0, mulai)
+        selesai = max(mulai + 5, selesai)
+        return mulai, selesai
+
+    def _siapkan_studio_thread(self, idx):
+        """Download segmen + subtitle, ekstrak strip frame, lalu buka studio
+        di thread utama (lewat antrian_ui)."""
         log = self.log
         try:
+            m = self.momen_list[idx]
+            mulai, selesai = self._trim_momen(idx, m)
             url = self.url_var.get().strip()
-            preset_nama = self.preset_var.get()
+            facecam = self._facecam_saat_ini()
+            log("Preset facecam: %s %s" % (self.preset_var.get(), facecam))
+            tmp_dir = tempfile.mkdtemp(prefix="m3xstudio_")
+            seg = downloader.download_section(
+                url, mulai, selesai, os.path.join(tmp_dir, "seg"), log=log)
+            srt, pesan_sub = subtitler.download_auto_subs(
+                url, mulai, selesai, tmp_dir, log=log)
+            if not srt:
+                log("  Subtitle: %s — preview TANPA subtitle." % pesan_sub)
+            frames, durasi = preview.ekstrak_strip(
+                seg, os.path.join(tmp_dir, "strip"))
+            srt_entries = sfx._parse_srt(srt) if srt else []
+            jadwal_auto = (sfx.jadwal_dari_subtitle(srt, self.sfx_var.get())
+                           if srt else [])
+            stiker_files = stickers.siapkan_stiker(
+                os.path.join(tmp_dir, "stiker"))
+            sfx_files = sfx.siapkan_sfx(os.path.join(tmp_dir, "sfx"))
+            data = {"idx": idx, "m": m, "mulai": mulai, "selesai": selesai,
+                    "seg": seg, "srt": srt, "facecam": facecam,
+                    "tmp_dir": tmp_dir, "frames": frames, "durasi": durasi,
+                    "srt_entries": srt_entries, "jadwal_auto": jadwal_auto,
+                    "stiker_files": stiker_files, "sfx_files": sfx_files}
+            self.antrian_ui.put(lambda d=data: self._buka_studio(d))
+        except Exception as e:  # noqa: BLE001 - tampilkan ke user
+            log("Studio gagal disiapkan: %s" % e)
+            self._set_status("Gagal: %s" % str(e)[:100])
+        finally:
+            self.sedang_jalan = False
+            self.tombol_cari.configure(state="normal")
+            if self.momen_list:
+                self.tombol_buat.configure(state="normal")
+                self.tombol_preview.configure(state="normal")
+
+    def _buka_studio(self, d):
+        """Buka jendela Studio Preview (thread utama)."""
+        if self._studio is not None:
+            try:
+                self._studio.destroy()
+            except tk.TclError:
+                pass
+            self._studio = None
+        if self._studio_tmp:
+            shutil.rmtree(self._studio_tmp, ignore_errors=True)
+        self._studio_tmp = d["tmp_dir"]
+        edits = self.edit_manual.setdefault(d["idx"], [])
+        self._studio = preview.StudioPreview(
+            self, judul=d["m"].get("title_id") or "Momen",
+            frames=d["frames"], durasi=d["durasi"], facecam=d["facecam"],
+            srt_entries=d["srt_entries"], jadwal_auto=d["jadwal_auto"],
+            stiker_files=d["stiker_files"], sfx_files=d["sfx_files"],
+            edits=edits,
+            on_render=lambda ed: self._render_dari_studio(d, ed),
+            on_tutup=self._tutup_studio, log=self.log)
+        self._set_status(
+            "Studio Preview terbuka — play, tambah stiker/sound, lalu Render.")
+
+    def _tutup_studio(self):
+        """Studio ditutup tanpa render — bersihkan file sementara."""
+        self._studio = None
+        if self._studio_tmp:
+            shutil.rmtree(self._studio_tmp, ignore_errors=True)
+            self._studio_tmp = None
+
+    def _render_dari_studio(self, d, edits):
+        """Render penuh momen itu dengan edit manual dari timeline."""
+        if self._studio is not None:
+            try:
+                self._studio.destroy()
+            except tk.TclError:
+                pass
+            self._studio = None
+        self.sedang_jalan = True
+        self.tombol_cari.configure(state="disabled")
+        self.tombol_preview.configure(state="disabled")
+        self.tombol_buat.configure(state="disabled")
+        self._set_status("Merender clip dari Studio Preview...")
+        threading.Thread(target=self._render_studio_thread, args=(d, edits),
+                         daemon=True).start()
+
+    def _render_studio_thread(self, d, edits):
+        log = self.log
+        tmp_dir = d["tmp_dir"]
+        try:
             meta = self.meta_saat_ini or {}
             slug = self.slug_saat_ini or slug_dari_judul(
                 meta.get("title") or "", meta.get("id") or "video")
-            if preset_nama == "Custom":
-                try:
-                    facecam = {k: float(v.get()) for k, (v, e) in self.custom_vars.items()}
-                except ValueError:
-                    raise ValueError("Koordinat Custom harus angka 0.0-1.0.")
-            else:
-                facecam = presets.get_preset(preset_nama)
             out_dir = self.output_var.get().strip() or "output"
             os.makedirs(out_dir, exist_ok=True)
-            tmp_dir = tempfile.mkdtemp(prefix="m3xclip_")
             clip = self._proses_satu_momen(
-                idx, self.momen_list[idx], url, facecam, out_dir, tmp_dir, slug,
-                preview=True, log=log)
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+                d["idx"], d["m"], self.url_var.get().strip(), d["facecam"],
+                out_dir, tmp_dir, slug, log=log,
+                seg_path=d["seg"], srt_path=d["srt"], edit_manual=edits)
             if clip:
-                log("Preview jadi: %s — dibuka di video player." % clip)
-                self._set_status("Preview: %s" % clip)
-                self._buka_file(clip)
+                log("SELESAI (dari Studio): %s" % clip)
+                self._set_status("Selesai: %s" % clip)
             else:
-                self._set_status("Preview gagal — lihat log.")
+                self._set_status("Render gagal — lihat log.")
         except Exception as e:  # noqa: BLE001 - tampilkan ke user
             log("BERHENTI: %s" % e)
             self._set_status("Gagal: %s" % str(e)[:100])
         finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            if self._studio_tmp == tmp_dir:
+                self._studio_tmp = None
             self.sedang_jalan = False
             self.tombol_cari.configure(state="normal")
             if self.momen_list:
