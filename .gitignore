@@ -1,0 +1,22 @@
+# API key + hasil kerja — jangan pernah masuk repo
+config.json
+output/
+*.mp4
+*.srt
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# PyInstaller
+dist/
+build/
+*.spec
+
+# ffmpeg yang didownload manual (besar, download ulang saja)
+tools/
+
+# Log
+*.log

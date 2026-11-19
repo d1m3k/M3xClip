@@ -1,0 +1,5 @@
+# Dependensi M3xClip v1 (versi yang sudah dites di VM build 2026-11-20)
+# tkinter adalah bawaan Python, tidak perlu diinstall.
+google-genai==3.6.1
+yt-dlp==2026.10.26
+Pillow==13.0.0
