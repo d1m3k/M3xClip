@@ -31,6 +31,10 @@ except ImportError:  # SDK belum terinstall — pesan errornya jelas di bawah
 # Daftar kandidat dicoba BERURUTAN kalau model yang dipakai mengembalikan
 # 404 NOT_FOUND (model sudah tidak tersedia) — lihat _generate().
 DEFAULT_MODEL = "gemini-3.8-flash"
+# Model yang sudah tidak diberikan ke akun/key baru (Nov 2026).
+# Jangan pernah dicoba PERTAMA — tetap ada di MODEL_CANDIDATES
+# sebagai usaha terakhir, siapa tahu akun lama masih bisa.
+KNOWN_DEAD_MODELS = {"gemini-2.5-flash"}
 MODEL_CANDIDATES = ["gemini-3.8-flash", "gemini-3-flash", "gemini-2.5-flash"]
 
 # Skema JSON yang diminta ke Gemini (supaya jawabannya rapi dan bisa diparse).
@@ -76,7 +80,13 @@ class GeminiClient:
                 "Jalankan: pip install -r requirements.txt"
             )
         self._api_key = str(api_key).strip()
-        self.model = model or DEFAULT_MODEL
+        # Migrasi: config lama mungkin masih menyimpan model yang sudah
+        # mati (mis. gemini-2.5-flash) — pakai default baru sebagai utama
+        # supaya Tes Koneksi tidak buang satu panggilan ke model mati.
+        requested = model or DEFAULT_MODEL
+        if requested in KNOWN_DEAD_MODELS:
+            requested = DEFAULT_MODEL
+        self.model = requested
         # Urutan coba: model dari config dulu, lalu kandidat lain.
         self._models = []
         for m in [self.model] + MODEL_CANDIDATES:
