@@ -88,12 +88,15 @@ Kalau tidak ada, .exe tetap jalan asal ffmpeg terinstall di PATH.
 6. **Edit tipis** (sebelum render): atur ukuran subtitle (Kecil/Sedang/Besar),
    Sound (Mati/Minimal/Ramai) dan Stiker (Mati/Otomatis); geser trim
    mulai/selesai tiap momen kalau mau.
-7. Klik **👁 Preview** untuk membuka **Studio Preview** (v1.3): video
-   preview di dalam aplikasi (bisa di-play, ada slider + timeline),
-   tambah stiker lucu (HAHA!/WOW!/KOCAK!) atau sound effect
-   (pop/boing/ding) di detik yang dipilih — klik timeline untuk lompat,
-   lalu **✓ Render clip ini**. Edit manual dari timeline ikut masuk ke
-   hasil render (juga berlaku kalau nanti klik Buat Clip).
+7. **Program Monitor (v1.5)** — panel preview di sebelah kiri jendela
+   utama (selalu terlihat, ala Program Monitor di Premiere / preview di
+   CapCut): klik **▶ Lihat di Monitor** di tiap momen, atau **👁 Preview**
+   untuk momen pertama yang dicentang. Videonya bisa di-play, ada
+   slider + **timeline** (klik untuk lompat), tambah stiker lucu
+   (HAHA!/WOW!/KOCAK!) atau sound effect (pop/boing/ding) di detik
+   yang dipilih, lalu **✓ Render clip ini**. Edit manual dari timeline
+   ikut masuk ke hasil render (juga berlaku kalau nanti klik Buat Clip).
+   Monitor tetap bisa dipakai sesudah render.
 8. Atau langsung klik **✂️ Buat Clip yang Dipilih** untuk render penuh
    tanpa preview. Untuk tiap momen yang dicentang, yt-dlp download
    **hanya durasi momen itu** dari URL (bukan VOD utuh), lalu clip

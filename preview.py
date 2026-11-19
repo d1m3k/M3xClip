@@ -1,12 +1,14 @@
-"""Studio Preview v1.3 — pratinjau video DI DALAM aplikasi + timeline edit.
+"""Program Monitor v1.5 — panel preview video di dalam jendela utama,
+ala Program Monitor di Premiere / preview di CapCut / Composition panel.
 
-Kayak aplikasi editing ringan (ala CapCut): ada video preview yang bisa
-di-play, ada timeline untuk nambah stiker lucu / sound effect di detik
-yang dipilih, lalu render.
+Panel ini SELALU terlihat di sebelah kiri jendela utama (bukan jendela
+pop-up): video preview yang bisa di-play, timeline untuk nambah stiker
+lucu / sound effect di detik yang dipilih, lalu render.
 
 Cara kerja (tanpa dependency baru — cuma ffmpeg + PIL yang sudah dipakai):
-- Saat preview dibuka, segmen momen diekstrak jadi strip frame (5 fps,
-  sekali jalan). Playback tinggal menampilkan gambar — ringan & stabil.
+- Saat momen dimuat ke monitor (tombol ▶ Lihat di momen, atau 👁 Preview),
+  segmen diekstrak jadi strip frame (5 fps, sekali jalan). Playback
+  tinggal menampilkan gambar — ringan & stabil.
 - Tiap frame yang ditampilkan di-layout ulang dengan PIL persis seperti
   hasil render (gameplay atas, facecam bawah), lalu subtitle & stiker
   digambar di atasnya. Jadi yang terlihat = yang akan di-render.
@@ -31,7 +33,6 @@ import stickers
 FPS_STRIP = 5
 LEBAR_TAMPIL = 270
 TINGGI_TAMPIL = 480
-LEBAR_TIMELINE = 540
 
 
 def ekstrak_strip(seg_path, tmp_dir, fps=FPS_STRIP, lebar=480):
@@ -154,60 +155,67 @@ def mainkan_wav(path):
         pass
 
 
-class StudioPreview(tk.Toplevel):
-    """Jendela studio: video preview + timeline + tambah stiker/sound."""
+class MonitorPanel(ttk.Frame):
+    """Panel Program Monitor: video preview + timeline + tambah stiker/sound.
+    Selalu menempel di jendela utama; dimuat lewat muat(data)."""
 
-    def __init__(self, master, *, judul, frames, durasi, facecam, srt_entries,
-                 jadwal_auto, stiker_files, sfx_files, edits, on_render,
-                 on_tutup, log):
+    def __init__(self, master, *, on_render, log):
         super().__init__(master)
-        self.title("Studio Preview — %s" % judul)
-        self.geometry("580x900")
-        self.frames = frames  # [(waktu, path)]
-        self.durasi = durasi
-        self.facecam = facecam
-        self.srt_entries = srt_entries  # [(mulai, selesai, teks)]
-        self.jadwal_auto = jadwal_auto  # [{waktu, jenis, stiker, sampai}]
-        self.stiker_files = stiker_files  # {teks: path}
-        self.sfx_files = sfx_files  # {jenis: path}
-        self.edits = edits  # list edit manual (ditulis ke app.edit_manual)
-        self.on_render = on_render
-        self.on_tutup = on_tutup
+        self.on_render = on_render  # dipanggil (data, edits) saat Render
         self.log = log
+        self.lebar_timeline = 280
+        self.frames = []  # [(waktu, path)]
+        self.durasi = 0.0
+        self.facecam = None
+        self.srt_entries = []  # [(mulai, selesai, teks)]
+        self.jadwal_auto = []  # [{waktu, jenis, stiker, sampai}]
+        self.stiker_files = {}  # {teks: path}
+        self.sfx_files = {}  # {jenis: path}
+        self.edits = []  # list edit manual (ditulis ke app.edit_manual)
+        self.data = None  # data momen yang sedang dimuat
         self.waktu = 0.0
         self.mutar = False
         self._foto = None
         self._terakhir_sfx = -1.0
 
+        ttk.Label(self, text="PROGRAM MONITOR",
+                  font=("", 10, "bold")).pack(anchor="w", padx=6, pady=(4, 0))
+        self.label_momen = ttk.Label(self, text="Belum ada momen.",
+                                     foreground="gray", wraplength=280)
+        self.label_momen.pack(anchor="w", padx=6)
+
         # --- Video ---
-        self.label_video = ttk.Label(self, text="Memuat preview...")
-        self.label_video.pack(pady=(8, 4))
+        self.label_video = ttk.Label(
+            self, text="Klik ▶ Lihat di momen,\natau 👁 Preview.",
+            foreground="gray", justify="center")
+        self.label_video.pack(pady=(6, 4))
 
         # --- Kontrol play + slider ---
         frame_kontrol = ttk.Frame(self)
-        frame_kontrol.pack(fill="x", padx=10)
+        frame_kontrol.pack(fill="x", padx=6)
         self.tombol_play = ttk.Button(frame_kontrol, text="▶  Play",
-                                      command=self._toggle_play, width=10)
+                                      command=self._toggle_play, width=9)
         self.tombol_play.pack(side="left")
         self.label_waktu = ttk.Label(frame_kontrol, text="00:00 / 00:00")
-        self.label_waktu.pack(side="left", padx=8)
-        self.skala = tk.Scale(frame_kontrol, from_=0, to=max(1, durasi),
+        self.label_waktu.pack(side="left", padx=6)
+        self.skala = tk.Scale(frame_kontrol, from_=0, to=1,
                               resolution=0.1, orient="horizontal",
-                              showvalue=False, command=self._geser_skala)
+                              showvalue=False, command=self._geser_skala,
+                              length=110)
         self.skala.pack(side="left", fill="x", expand=True)
 
         # --- Timeline ---
         ttk.Label(self, text="Timeline — klik untuk lompat ke detik itu",
-                  foreground="gray").pack(anchor="w", padx=10, pady=(6, 0))
-        self.canvas = tk.Canvas(self, width=LEBAR_TIMELINE, height=64,
+                  foreground="gray").pack(anchor="w", padx=6, pady=(6, 0))
+        self.canvas = tk.Canvas(self, width=self.lebar_timeline, height=64,
                                 bg="white", highlightthickness=1,
                                 highlightbackground="#cccccc")
-        self.canvas.pack(padx=10, pady=2)
+        self.canvas.pack(padx=6, pady=2)
         self.canvas.bind("<Button-1>", self._klik_timeline)
 
         # --- Tambah stiker / sound di posisi playhead ---
         frame_tambah = ttk.LabelFrame(self, text="Tambah di posisi playhead")
-        frame_tambah.pack(fill="x", padx=10, pady=6)
+        frame_tambah.pack(fill="x", padx=6, pady=6)
         ttk.Label(frame_tambah, text="Stiker:").grid(
             row=0, column=0, sticky="w", padx=4, pady=4)
         self.stiker_var = tk.StringVar(value="HAHA!")
@@ -219,33 +227,51 @@ class StudioPreview(tk.Toplevel):
                    command=self._tambah_stiker).grid(
                        row=0, column=2, padx=4, pady=4)
         ttk.Label(frame_tambah, text="Sound:").grid(
-            row=0, column=3, sticky="w", padx=(12, 2), pady=4)
+            row=1, column=0, sticky="w", padx=4, pady=4)
         self.sfx_var = tk.StringVar(value="ding")
         ttk.Combobox(frame_tambah, textvariable=self.sfx_var,
                      values=["pop", "boing", "ding"],
                      state="readonly", width=8).grid(
-                         row=0, column=4, padx=2, pady=4)
+                         row=1, column=1, padx=2, pady=4)
         ttk.Button(frame_tambah, text="＋ Sound di sini",
                    command=self._tambah_sfx).grid(
-                       row=0, column=5, padx=4, pady=4)
+                       row=1, column=2, padx=4, pady=4)
 
         # --- Daftar edit manual ---
         ttk.Label(self, text="Edit manual di timeline ini:",
-                  foreground="gray").pack(anchor="w", padx=10)
-        self.list_edits = tk.Listbox(self, height=4)
-        self.list_edits.pack(fill="x", padx=10, pady=2)
+                  foreground="gray").pack(anchor="w", padx=6)
+        self.list_edits = tk.Listbox(self, height=4, width=38)
+        self.list_edits.pack(fill="x", padx=6, pady=2)
         ttk.Button(self, text="Hapus edit yang dipilih",
-                   command=self._hapus_edit).pack(anchor="w", padx=10)
+                   command=self._hapus_edit).pack(anchor="w", padx=6)
 
-        # --- Render / tutup ---
-        frame_bawah = ttk.Frame(self)
-        frame_bawah.pack(fill="x", padx=10, pady=10)
-        ttk.Button(frame_bawah, text="✓  Render clip ini",
-                   command=self._klik_render).pack(side="left", padx=(0, 6))
-        ttk.Button(frame_bawah, text="Tutup",
-                   command=self._klik_tutup).pack(side="left")
-        self.protocol("WM_DELETE_WINDOW", self._klik_tutup)
+        # --- Render ---
+        ttk.Button(self, text="✓  Render clip ini",
+                   command=self._klik_render).pack(
+                       fill="x", padx=6, pady=10)
+        self._gambar_timeline()
 
+    # ------------------------------------------------------------------
+    # Muat momen
+    # ------------------------------------------------------------------
+    def muat(self, data):
+        """Muat 1 momen ke monitor (dipanggil dari thread utama)."""
+        self.mutar = False
+        self.tombol_play.configure(text="▶  Play")
+        self.data = data
+        self.frames = data["frames"]
+        self.durasi = data["durasi"]
+        self.facecam = data["facecam"]
+        self.srt_entries = data["srt_entries"]
+        self.jadwal_auto = data["jadwal_auto"]
+        self.stiker_files = data["stiker_files"]
+        self.sfx_files = data["sfx_files"]
+        self.edits = data["edits"]
+        self.waktu = 0.0
+        self._terakhir_sfx = -1.0
+        self.skala.configure(to=max(1, self.durasi))
+        self.skala.set(0)
+        self.label_momen.configure(text=data["m"].get("title_id") or "Momen")
         self._tampilkan_frame()
         self._gambar_timeline()
         self._segarkan_daftar()
@@ -282,6 +308,8 @@ class StudioPreview(tk.Toplevel):
         return [p for p in aktif if p]
 
     def _tampilkan_frame(self):
+        if not self.frames or not self.facecam:
+            return
         path = self._frame_pada(self.waktu)
         if not path:
             return
@@ -295,7 +323,7 @@ class StudioPreview(tk.Toplevel):
         self._gambar_timeline()
 
     def _langkah(self):
-        if not self.mutar:
+        if not self.mutar or not self.frames:
             return
         baru = self.waktu + 0.2
         if baru >= self.durasi:
@@ -323,6 +351,8 @@ class StudioPreview(tk.Toplevel):
         self._terakhir_sfx = waktu
 
     def _toggle_play(self):
+        if not self.frames:
+            return
         if self.mutar:
             self.mutar = False
             self.tombol_play.configure(text="▶  Play")
@@ -335,6 +365,8 @@ class StudioPreview(tk.Toplevel):
             self.after(200, self._langkah)
 
     def _geser_skala(self, nilai):
+        if not self.frames:
+            return
         self.waktu = float(nilai)
         self._terakhir_sfx = self.waktu
         self._tampilkan_frame()
@@ -343,13 +375,15 @@ class StudioPreview(tk.Toplevel):
     # Timeline
     # ------------------------------------------------------------------
     def _x_waktu(self, waktu):
-        return 8 + (waktu / max(1, self.durasi)) * (LEBAR_TIMELINE - 16)
+        return 8 + (waktu / max(1, self.durasi)) * (self.lebar_timeline - 16)
 
     def _gambar_timeline(self):
         c = self.canvas
         c.delete("all")
+        if self.durasi <= 0:
+            return
         # Bar dasar
-        c.create_rectangle(8, 28, LEBAR_TIMELINE - 8, 36, fill="#eeeeee",
+        c.create_rectangle(8, 28, self.lebar_timeline - 8, 36, fill="#eeeeee",
                            outline="#cccccc")
         # Subtitle: tick abu-abu
         for mulai, selesai, _teks in self.srt_entries:
@@ -378,8 +412,10 @@ class StudioPreview(tk.Toplevel):
         c.create_line(x, 4, x, 60, fill="#DC2626", width=2)
 
     def _klik_timeline(self, event):
+        if self.durasi <= 0 or not self.frames:
+            return
         self.waktu = max(0.0, min(self.durasi,
-                                  (event.x - 8) / (LEBAR_TIMELINE - 16) * self.durasi))
+                                  (event.x - 8) / (self.lebar_timeline - 16) * self.durasi))
         self._terakhir_sfx = self.waktu
         self.skala.set(self.waktu)
         self._tampilkan_frame()
@@ -388,19 +424,23 @@ class StudioPreview(tk.Toplevel):
     # Tambah / hapus edit manual
     # ------------------------------------------------------------------
     def _tambah_stiker(self):
+        if not self.frames:
+            return
         teks = self.stiker_var.get()
         self.edits.append({"waktu": round(self.waktu, 2), "kind": "stiker",
                            "nilai": teks, "sampai": round(self.waktu + 2.0, 2)})
-        self.log("  Studio: stiker %s ditambah di %.1f detik."
+        self.log("  Monitor: stiker %s ditambah di %.1f detik."
                  % (teks, self.waktu))
         self._segarkan_daftar()
         self._tampilkan_frame()
 
     def _tambah_sfx(self):
+        if not self.frames:
+            return
         jenis = self.sfx_var.get()
         self.edits.append({"waktu": round(self.waktu, 2), "kind": "sfx",
                            "nilai": jenis})
-        self.log("  Studio: sound %s ditambah di %.1f detik."
+        self.log("  Monitor: sound %s ditambah di %.1f detik."
                  % (jenis, self.waktu))
         self._segarkan_daftar()
         self._tampilkan_frame()
@@ -424,21 +464,18 @@ class StudioPreview(tk.Toplevel):
         urut = sorted(self.edits, key=lambda x: x["waktu"])
         target = urut[pilih[0]]
         self.edits.remove(target)
-        self.log("  Studio: edit dihapus (%s)." % teks)
+        self.log("  Monitor: edit dihapus (%s)." % teks)
         self._segarkan_daftar()
         self._tampilkan_frame()
 
     # ------------------------------------------------------------------
-    # Render / tutup
+    # Render
     # ------------------------------------------------------------------
     def _klik_render(self):
+        if not self.data:
+            return
         self.mutar = False
-        self.on_render(list(self.edits))
-
-    def _klik_tutup(self):
-        self.mutar = False
-        self.on_tutup()
-        self.destroy()
+        self.on_render(self.data, list(self.edits))
 
 
 def _fmt(detik):
