@@ -96,16 +96,44 @@ def hitung_crop_gameplay(lebar, tinggi, facecam):
     return {"x": x0, "y": 0, "w": lebar_crop, "h": tinggi}
 
 
-def assemble_clip(segment_path, facecam, out_path, srt_path=None, log=None):
-    """Rakit segmen 16:9 menjadi clip vertikal 1080x1920.
+UKURAN_SUB = {"Kecil": 11, "Sedang": 14, "Besar": 18}
+
+
+def _gaya_subtitle(ukuran="Sedang"):
+    """Style subtitle ala Short referensi: kuning, outline hitam, kecil,
+    di bawah area gameplay (Alignment=2, di atas batas facecam).
+
+    FontSize di sini skala libass (frame 960 px -> x3,33): 14 berarti
+    ~47 px di layar 1080 — kecil, tidak menutupi gameplay.
+    """
+    fs = UKURAN_SUB.get(ukuran, 14)
+    return ("FontName=DejaVu Sans,FontSize=%d,Bold=1,"
+            "PrimaryColour=&H00FFFF,OutlineColour=&H000000,"
+            "BorderStyle=1,Outline=2,Alignment=2,MarginV=30" % fs)
+
+
+def assemble_clip(segment_path, facecam, out_path, srt_path=None, log=None,
+                  ukuran_sub="Sedang", subtitle_on=True, sfx_mix=None,
+                  stiker_jadwal=None, preset="medium", crf=20,
+                  lebar=LEBAR_OUT, tinggi=TINGGI_OUT):
+    """Rakit segmen 16:9 menjadi clip vertikal (default 1080x1920).
 
     segment_path: video segmen hasil yt-dlp (isinya gameplay + facecam).
     facecam     : dict relatif {x, y, w, h} dari preset/Custom.
     srt_path    : file SRT subtitle (opsional, boleh None).
+    ukuran_sub  : "Kecil"/"Sedang"/"Besar" (lihat UKURAN_SUB).
+    subtitle_on : False = tanpa subtitle.
+    sfx_mix     : file WAV berisi SFX yang sudah dicampur (relatif ke
+                  awal clip) — dicampur ke audio; None = tanpa SFX.
+    stiker_jadwal: list dict {path, mulai, sampai} — PNG stiker yang
+                  ditampilkan di pojok kanan atas area gameplay.
+    preset/crf  : kualitas encode (preview pakai ultrafast/30).
+    lebar/tinggi: ukuran output (preview pakai 540x960).
     Mengembalikan out_path.
     """
     info = probe_video(segment_path)
     W, H = info["width"], info["height"]
+    paruh = tinggi // 2
     if log:
         log("  Rakit clip: sumber %dx%d, durasi %.1f detik" % (W, H, info["duration"]))
 
@@ -120,46 +148,77 @@ def assemble_clip(segment_path, facecam, out_path, srt_path=None, log=None):
     # --- Crop gameplay (tengah, hindari facecam) ---
     g = hitung_crop_gameplay(W, H, facecam)
 
-    # Filter: gameplay -> scale cover 1080x960
+    # Filter: gameplay -> scale cover lebar x paruh
     filter_top = (
         "[0:v]crop=%d:%d:%d:%d,"
         "scale=%d:%d:force_original_aspect_ratio=increase,"
         "crop=%d:%d[top0]"
-        % (g["w"], g["h"], g["x"], g["y"], LEBAR_OUT, TINGGI_PARUH, LEBAR_OUT, TINGGI_PARUH)
+        % (g["w"], g["h"], g["x"], g["y"], lebar, paruh, lebar, paruh)
     )
     # Subtitle dibakar ke stream atas saja (sebelum digabung).
-    if srt_path and os.path.isfile(srt_path):
+    if subtitle_on and srt_path and os.path.isfile(srt_path):
         srt_esc = _escape_filter_path(srt_path)
-        gaya = ("FontName=DejaVu Sans,FontSize=30,Bold=1,"
-                "PrimaryColour=&HFFFFFF,OutlineColour=&H000000,"
-                "BorderStyle=1,Outline=2,Alignment=2,MarginV=30")
-        filter_top += ";[top0]subtitles='%s':force_style='%s'[top]" % (srt_esc, gaya)
+        filter_top += (";[top0]subtitles='%s':force_style='%s'[top]"
+                       % (srt_esc, _gaya_subtitle(ukuran_sub)))
         if log:
-            log("  Subtitle dibakar ke area gameplay.")
+            log("  Subtitle dibakar ke area gameplay (%s)." % ukuran_sub)
     else:
         filter_top += ";[top0]copy[top]"
 
-    # Filter: facecam -> scale cover 1080x960
+    # Filter: facecam -> scale cover lebar x paruh
     filter_bot = (
         "[0:v]crop=%d:%d:%d:%d,"
         "scale=%d:%d:force_original_aspect_ratio=increase,"
         "crop=%d:%d[bot]"
-        % (fw, fh, fx, fy, LEBAR_OUT, TINGGI_PARUH, LEBAR_OUT, TINGGI_PARUH)
+        % (fw, fh, fx, fy, lebar, paruh, lebar, paruh)
     )
 
-    filter_complex = "%s;%s;[top][bot]vstack,format=yuv420p[v]" % (
-        filter_top, filter_bot)
+    filter_bagian = ["%s;%s;[top][bot]vstack,format=yuv420p[v0]" % (
+        filter_top, filter_bot)]
 
-    cmd = [
-        find_ffmpeg(), "-y",
-        "-i", segment_path,
-        "-filter_complex", filter_complex,
-        "-map", "[v]",
-    ]
-    if info["has_audio"]:
+    # Stiker: tiap entri jadi satu input gambar (loop), di-overlay dengan
+    # enable between(t, mulai, sampai) di pojok kanan atas gameplay.
+    stiker_jadwal = stiker_jadwal or []
+    ukuran_stiker = max(96, lebar // 4)
+    label_v = "v0"
+    for j, st in enumerate(stiker_jadwal):
+        idx_input = 1 + j
+        label_stk = "stk%d" % j
+        label_next = "v%d" % (j + 1)
+        filter_bagian.append(
+            "[%d:v]scale=%d:%d[%s]" % (idx_input, ukuran_stiker, ukuran_stiker, label_stk))
+        filter_bagian.append(
+            "[%s][%s]overlay=%d:16:enable='between(t,%s,%s)'[%s]"
+            % (label_v, label_stk, lebar - ukuran_stiker - 16,
+               st["mulai"], st["sampai"], label_next))
+        label_v = label_next
+
+    # Audio: campur SFX ke audio segmen (kalau ada).
+    idx_sfx = 1 + len(stiker_jadwal)
+    label_audio = None
+    if sfx_mix and os.path.isfile(sfx_mix):
+        if info["has_audio"]:
+            filter_bagian.append(
+                "[0:a][%d:a]amix=inputs=2:normalize=0:duration=first[aout]"
+                % idx_sfx)
+            label_audio = "[aout]"
+        else:
+            label_audio = "[%d:a]" % idx_sfx
+
+    filter_complex = ";".join(filter_bagian)
+
+    cmd = [find_ffmpeg(), "-y", "-i", segment_path]
+    for st in stiker_jadwal:
+        cmd += ["-loop", "1", "-i", st["path"]]
+    if sfx_mix and os.path.isfile(sfx_mix):
+        cmd += ["-i", sfx_mix]
+    cmd += ["-filter_complex", filter_complex, "-map", "[%s]" % label_v]
+    if label_audio:
+        cmd += ["-map", label_audio, "-c:a", "aac", "-b:a", "128k"]
+    elif info["has_audio"]:
         cmd += ["-map", "0:a", "-c:a", "aac", "-b:a", "128k"]
     cmd += [
-        "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+        "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
         "-pix_fmt", "yuv420p",
         "-movflags", "+faststart",
         "-shortest", out_path,

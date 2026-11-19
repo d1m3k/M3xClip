@@ -78,10 +78,21 @@ Kalau tidak ada, .exe tetap jalan asal ffmpeg terinstall di PATH.
 5. Pilih **folder output**, klik **🔍 Cari Momen** — Gemini menonton video
    lalu menampilkan daftar rekomendasi (judul, jam mulai–selesai, durasi,
    alasan). **Centang** momen yang mau dipakai.
-6. Klik **✂️ Buat Clip yang Dipilih**. Untuk tiap momen yang dicentang,
+6. **Edit tipis** (sebelum render): atur ukuran subtitle (Kecil/Sedang/Besar),
+   Sound (Mati/Minimal/Ramai) dan Stiker (Mati/Otomatis); geser trim
+   mulai/selesai tiap momen kalau mau. Klik **👁 Preview** untuk lihat
+   hasilnya dulu (render cepat 540x960, langsung dibuka di video player).
+7. Klik **✂️ Buat Clip yang Dipilih**. Untuk tiap momen yang dicentang,
    yt-dlp download **hanya durasi momen itu** dari URL (bukan VOD utuh),
    lalu clip dirakit + thumbnail dibuat. Pantau log.
-7. Hasil: `{slug}_clip1.mp4`, `{slug}_clip2.mp4`, … + `{slug}_thumb1.jpg`, …
+8. Hasil: `{slug}_clip1.mp4`, `{slug}_clip2.mp4`, … + `{slug}_thumb1.jpg`, …
+
+**Gaya clip (v1.2, ala Short referensi):** subtitle kecil kuning ber-outline
+hitam di bawah area gameplay (tidak menutupi gameplay maupun facecam);
+sound effect (pop di awal, boing/ding di baris berk kata kocak seperti
+wkwk, haha, anjir, wow) + stiker bintang (HAHA! / WOW! / KOCAK!) di pojok
+kanan atas gameplay selama ~2 detik. Semua SFX & stiker dibuat sendiri
+oleh program (ffmpeg + PIL), tanpa file eksternal.
 
 Catatan: kalau satu model Gemini sedang overload (503) atau kuotanya habis
 (429), program otomatis pindah ke model lain (3.8-flash → 3.5-flash-lite →

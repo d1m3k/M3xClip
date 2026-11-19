@@ -1,13 +1,17 @@
-"""M3xClip v1.1 — GUI untuk membuat clip Reels/Shorts dari VOD YouTube.
+"""M3xClip v1.2 — GUI untuk membuat clip Reels/Shorts dari VOD YouTube.
 
 Alur kerja 2 langkah (rekomendasi dulu, baru potong):
   LANGKAH 1 — klik "Cari Momen": ambil metadata VOD lewat yt-dlp,
   lalu Gemini menonton video lewat URL-nya langsung dan menampilkan
   daftar rekomendasi momen (judul, jam mulai-selesai, durasi, alasan).
-  LANGKAH 2 — centang momen yang mau dipakai, klik "Buat Clip yang
-  Dipilih": untuk tiap momen yang dicentang, yt-dlp download HANYA
-  durasi momen itu dari URL (bukan VOD utuh) -> ambil auto-subtitle
-  -> rakit clip vertikal 1080x1920 -> buat thumbnail.
+  LANGKAH 2 — centang momen yang mau dipakai, atur edit tipis
+  (ukuran subtitle, sound effect, stiker, trim mulai/selesai),
+  klik "Preview" untuk lihat hasilnya dulu, lalu klik
+  "Buat Clip yang Dipilih" untuk render penuh. Untuk tiap momen yang
+  dicentang, yt-dlp download HANYA durasi momen itu dari URL
+  (bukan VOD utuh) -> ambil auto-subtitle -> rakit clip vertikal
+  1080x1920 (subtitle kecil kuning di bawah gameplay, SFX + stiker
+  kocak di momen punchline) -> buat thumbnail.
   Hasil: {output}/{slug}_clip{N}.mp4 dan {slug}_thumb{N}.jpg.
 
 API key Gemini: dibuat user sendiri di Google AI Studio, disimpan di
@@ -20,6 +24,8 @@ import os
 import queue
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 import tkinter as tk
@@ -29,6 +35,8 @@ import assembler
 import downloader
 import gemini_client
 import presets
+import sfx
+import stickers
 import subtitler
 import thumbnail
 
@@ -52,6 +60,11 @@ def load_config():
         "dur_min": 30,
         "dur_max": 60,
         "output_dir": os.path.join(assembler.app_dir(), "output"),
+        # Edit tipis (v1.2)
+        "ukuran_sub": "Sedang",
+        "subtitle_on": True,
+        "sfx_mode": "Ramai",
+        "stiker_mode": "Otomatis",
     }
     try:
         with open(config_path(), "r", encoding="utf-8") as f:
@@ -90,8 +103,8 @@ def _format_waktu(detik):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("M3xClip — Clip Generator Reels/Shorts v1.1")
-        self.geometry("760x720")
+        self.title("M3xClip — Clip Generator Reels/Shorts v1.2")
+        self.geometry("760x780")
         self.resizable(True, True)
 
         self.cfg = load_config()
@@ -101,6 +114,7 @@ class App(tk.Tk):
         # Hasil LANGKAH 1 (rekomendasi momen) — dipakai LANGKAH 2.
         self.momen_list = []
         self.momen_vars = []
+        self.momen_trim = []  # list (var_mulai, var_selesai) per momen
         self.meta_saat_ini = None
         self.slug_saat_ini = None
 
@@ -189,18 +203,54 @@ class App(tk.Tk):
             row=baris, column=2, sticky="w", **pad)
         baris += 1
 
+        # --- Edit tipis (dipakai saat Preview & Buat Clip) ---
+        frame_edit = ttk.LabelFrame(self, text="Edit tipis (sebelum render)")
+        frame_edit.grid(row=baris, column=0, columnspan=3,
+                        sticky="ew", padx=10, pady=4)
+        ttk.Label(frame_edit, text="Subtitle:").grid(
+            row=0, column=0, sticky="w", padx=4, pady=4)
+        self.ukuran_sub_var = tk.StringVar(value="Sedang")
+        ttk.Combobox(frame_edit, textvariable=self.ukuran_sub_var,
+                     values=["Kecil", "Sedang", "Besar"],
+                     state="readonly", width=8).grid(
+                         row=0, column=1, padx=2, pady=4)
+        self.subtitle_on_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(frame_edit, text="tampilkan",
+                        variable=self.subtitle_on_var).grid(
+                            row=0, column=2, padx=2, pady=4)
+        ttk.Label(frame_edit, text="Sound:").grid(
+            row=0, column=3, sticky="w", padx=(10, 2), pady=4)
+        self.sfx_var = tk.StringVar(value="Ramai")
+        ttk.Combobox(frame_edit, textvariable=self.sfx_var,
+                     values=["Mati", "Minimal", "Ramai"],
+                     state="readonly", width=8).grid(
+                         row=0, column=4, padx=2, pady=4)
+        ttk.Label(frame_edit, text="Stiker:").grid(
+            row=0, column=5, sticky="w", padx=(10, 2), pady=4)
+        self.stiker_var = tk.StringVar(value="Otomatis")
+        ttk.Combobox(frame_edit, textvariable=self.stiker_var,
+                     values=["Mati", "Otomatis"],
+                     state="readonly", width=9).grid(
+                         row=0, column=6, padx=2, pady=4)
+        baris += 1
+
         frame_tombol = ttk.Frame(self)
         frame_tombol.grid(row=baris, column=0, columnspan=3,
                           sticky="ew", padx=10, pady=8)
         frame_tombol.columnconfigure(0, weight=1)
         frame_tombol.columnconfigure(1, weight=1)
+        frame_tombol.columnconfigure(2, weight=1)
         self.tombol_cari = ttk.Button(
             frame_tombol, text="🔍  Cari Momen", command=self._klik_cari_momen)
         self.tombol_cari.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self.tombol_preview = ttk.Button(
+            frame_tombol, text="👁  Preview", command=self._klik_preview,
+            state="disabled")
+        self.tombol_preview.grid(row=0, column=1, sticky="ew", padx=4)
         self.tombol_buat = ttk.Button(
             frame_tombol, text="✂️  Buat Clip yang Dipilih",
             command=self._klik_buat_clip, state="disabled")
-        self.tombol_buat.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self.tombol_buat.grid(row=0, column=2, sticky="ew", padx=(4, 0))
         baris += 1
 
         ttk.Label(self, text="Momen yang ditemukan (centang yang mau dibuat clip):").grid(
@@ -233,6 +283,10 @@ class App(tk.Tk):
         self.dur_min_var.set(self.cfg.get("dur_min", 30))
         self.dur_max_var.set(self.cfg.get("dur_max", 60))
         self.output_var.set(self.cfg.get("output_dir", ""))
+        self.ukuran_sub_var.set(self.cfg.get("ukuran_sub", "Sedang"))
+        self.subtitle_on_var.set(self.cfg.get("subtitle_on", True))
+        self.sfx_var.set(self.cfg.get("sfx_mode", "Ramai"))
+        self.stiker_var.set(self.cfg.get("stiker_mode", "Otomatis"))
         self._saat_preset_berubah()
 
     def _saat_preset_berubah(self, event=None):
@@ -326,6 +380,10 @@ class App(tk.Tk):
             "dur_min": self.dur_min_var.get(),
             "dur_max": self.dur_max_var.get(),
             "output_dir": self.output_var.get().strip() or "output",
+            "ukuran_sub": self.ukuran_sub_var.get(),
+            "subtitle_on": self.subtitle_on_var.get(),
+            "sfx_mode": self.sfx_var.get(),
+            "stiker_mode": self.stiker_var.get(),
         })
 
     def _validasi_awal(self):
@@ -352,6 +410,7 @@ class App(tk.Tk):
         self._simpan_preferensi()
         self.sedang_jalan = True
         self.tombol_cari.configure(state="disabled")
+        self.tombol_preview.configure(state="disabled")
         self.tombol_buat.configure(state="disabled")
         self._set_status("Mencari momen... lihat log di bawah.")
         threading.Thread(target=self._cari_momen_thread, daemon=True).start()
@@ -401,6 +460,7 @@ class App(tk.Tk):
         self.slug_saat_ini = slug_dari_judul(meta.get("title") or "",
                                              meta.get("id") or "video")
         self.momen_vars = []
+        self.momen_trim = []
         for m in momen:
             var = tk.BooleanVar(value=True)
             self.momen_vars.append(var)
@@ -416,7 +476,21 @@ class App(tk.Tk):
                 ttk.Label(self.frame_momen, text="      " + alasan,
                           foreground="gray", wraplength=700,
                           justify="left").pack(anchor="w", padx=6)
+            # Trim tipis: geser mulai/selesai momen (detik).
+            frame_trim = ttk.Frame(self.frame_momen)
+            frame_trim.pack(anchor="w", padx=6)
+            ttk.Label(frame_trim, text="      trim: mulai").pack(side="left")
+            var_mulai = tk.IntVar(value=m["start_sec"])
+            ttk.Spinbox(frame_trim, from_=0, to=99999,
+                        textvariable=var_mulai, width=6).pack(side="left", padx=2)
+            ttk.Label(frame_trim, text="s.d.").pack(side="left")
+            var_selesai = tk.IntVar(value=m["end_sec"])
+            ttk.Spinbox(frame_trim, from_=1, to=99999,
+                        textvariable=var_selesai, width=6).pack(side="left", padx=2)
+            ttk.Label(frame_trim, text="dtk").pack(side="left")
+            self.momen_trim.append((var_mulai, var_selesai))
         self.tombol_buat.configure(state="normal")
+        self.tombol_preview.configure(state="normal")
 
     # ------------------------------------------------------------------
     # LANGKAH 2 — Buat clip dari momen yang dicentang
@@ -438,6 +512,7 @@ class App(tk.Tk):
         self._simpan_preferensi()
         self.sedang_jalan = True
         self.tombol_cari.configure(state="disabled")
+        self.tombol_preview.configure(state="disabled")
         self.tombol_buat.configure(state="disabled")
         self._set_status("Membuat clip... lihat log di bawah.")
         threading.Thread(target=self._buat_clip_thread, args=(dipilih,),
@@ -476,43 +551,10 @@ class App(tk.Tk):
             berhasil = 0
             momen = self.momen_list
             for idx in dipilih:
-                m = momen[idx]
-                i = idx + 1  # nomor clip mengikuti urutan rekomendasi
-                try:
-                    log("=== Momen %d/%d: %s (%d-%d detik) ===" % (
-                        i, len(momen), m.get("title_id") or "?",
-                        m["start_sec"], m["end_sec"]))
-                    seg_base = os.path.join(tmp_dir, "seg%d" % i)
-                    seg = downloader.download_section(
-                        url, m["start_sec"], m["end_sec"], seg_base, log=log)
-
-                    srt, pesan_sub = subtitler.download_auto_subs(
-                        url, m["start_sec"], m["end_sec"], tmp_dir, log=log)
-                    if not srt:
-                        log("  Subtitle: %s — lanjut TANPA subtitle." % pesan_sub)
-
-                    clip_path = os.path.join(out_dir, "%s_clip%d.mp4" % (slug, i))
-                    assembler.assemble_clip(seg, facecam, clip_path, srt, log=log)
-
-                    # Frame thumbnail: detiknya RELATIF terhadap awal segmen,
-                    # karena seg cuma berisi potongan momen itu (bukan VOD utuh).
-                    frame_dtk = (m.get("thumbnail_frame_sec")
-                                 or m["start_sec"] + 2) - m["start_sec"]
-                    frame_dtk = max(0, frame_dtk)
-                    frame_path = os.path.join(tmp_dir, "thumb%d.jpg" % i)
-                    assembler.extract_frame(seg, frame_dtk, frame_path)
-                    thumb_path = os.path.join(out_dir, "%s_thumb%d.jpg" % (slug, i))
-                    thumbnail.make_thumbnail(
-                        frame_path, m.get("hook", ""), m.get("points", []), thumb_path)
-                    log("  Thumbnail: %s" % thumb_path)
-
-                    # Bersihkan file sementara segmen (hemat disk).
-                    for f in (seg, srt):
-                        if f and os.path.isfile(f):
-                            os.remove(f)
+                clip = self._proses_satu_momen(
+                    idx, momen[idx], url, facecam, out_dir, tmp_dir, slug, log=log)
+                if clip:
                     berhasil += 1
-                except Exception as e:  # noqa: BLE001 - lanjut ke momen berikut
-                    log("  GAGAL momen %d: %s" % (i, e))
 
             shutil.rmtree(tmp_dir, ignore_errors=True)
             log("SELESAI: %d/%d clip berhasil. Hasil di: %s"
@@ -526,6 +568,172 @@ class App(tk.Tk):
             self.tombol_cari.configure(state="normal")
             if self.momen_list:
                 self.tombol_buat.configure(state="normal")
+                self.tombol_preview.configure(state="normal")
+
+    def _proses_satu_momen(self, idx, m, url, facecam, out_dir, tmp_dir, slug,
+                           preview=False, log=None):
+        """Proses SATU momen: download segmen (durasi trim) -> subtitle ->
+        SFX + stiker dari kata kocak -> rakit clip -> thumbnail.
+        Kembalikan clip_path, atau None kalau gagal.
+        Dipakai Buat Clip (penuh) dan Preview (cepat, resolusi rendah)."""
+        log = log or self.log
+        i = idx + 1
+        # Trim dari spinbox (kalau ada), dijaga tetap masuk akal.
+        try:
+            mulai = int(self.momen_trim[idx][0].get())
+            selesai = int(self.momen_trim[idx][1].get())
+        except (IndexError, AttributeError, ValueError, tk.TclError):
+            mulai, selesai = m["start_sec"], m["end_sec"]
+        mulai = max(0, mulai)
+        selesai = max(mulai + 5, selesai)
+        try:
+            log("=== Momen %d: %s (%d-%d detik)%s ===" % (
+                i, m.get("title_id") or "?", mulai, selesai,
+                " [PREVIEW]" if preview else ""))
+            seg_base = os.path.join(tmp_dir, "seg%d" % i)
+            seg = downloader.download_section(url, mulai, selesai, seg_base, log=log)
+
+            srt, pesan_sub = subtitler.download_auto_subs(
+                url, mulai, selesai, tmp_dir, log=log)
+            if not srt:
+                log("  Subtitle: %s — lanjut TANPA subtitle." % pesan_sub)
+
+            # SFX + stiker dari subtitle (baris berk kata kocak).
+            mode_sfx = self.sfx_var.get()
+            mode_stiker = self.stiker_var.get()
+            jadwal = sfx.jadwal_dari_subtitle(srt, mode_sfx) if srt else []
+            sfx_mix = None
+            if mode_sfx != "Mati" and any(j.get("jenis") for j in jadwal):
+                berkas_sfx = sfx.siapkan_sfx(os.path.join(tmp_dir, "sfx"))
+                sfx_mix = sfx.campur_jadwal(
+                    jadwal, berkas_sfx,
+                    os.path.join(tmp_dir, "mix%d.wav" % i), selesai - mulai)
+                if sfx_mix:
+                    log("  SFX: %d efek dicampur."
+                        % len([j for j in jadwal if j.get("jenis")]))
+            stiker_jadwal = []
+            if mode_stiker == "Otomatis":
+                entri_stiker = [j for j in jadwal if j.get("stiker")]
+                if entri_stiker:
+                    berkas_stiker = stickers.siapkan_stiker(
+                        os.path.join(tmp_dir, "stiker"))
+                    for j in entri_stiker:
+                        stiker_jadwal.append({
+                            "path": berkas_stiker[j["stiker"]],
+                            "mulai": j["waktu"],
+                            "sampai": j.get("sampai", j["waktu"] + 2.0),
+                        })
+                    log("  Stiker: %d stiker." % len(stiker_jadwal))
+
+            nama = ("preview_clip%d.mp4" % i) if preview else ("%s_clip%d.mp4" % (slug, i))
+            clip_path = os.path.join(out_dir, nama)
+            assembler.assemble_clip(
+                seg, facecam, clip_path, srt, log=log,
+                ukuran_sub=self.ukuran_sub_var.get(),
+                subtitle_on=self.subtitle_on_var.get(),
+                sfx_mix=sfx_mix, stiker_jadwal=stiker_jadwal,
+                preset="ultrafast" if preview else "medium",
+                crf=30 if preview else 20,
+                lebar=540 if preview else 1080,
+                tinggi=960 if preview else 1920)
+
+            # Frame thumbnail: detiknya RELATIF terhadap awal segmen,
+            # karena seg cuma berisi potongan momen itu (bukan VOD utuh).
+            frame_dtk = (m.get("thumbnail_frame_sec") or mulai + 2) - mulai
+            frame_dtk = max(0, frame_dtk)
+            frame_path = os.path.join(tmp_dir, "thumb%d.jpg" % i)
+            assembler.extract_frame(seg, frame_dtk, frame_path)
+            thumb_path = os.path.join(out_dir, "%s_thumb%d.jpg" % (slug, i))
+            thumbnail.make_thumbnail(
+                frame_path, m.get("hook", ""), m.get("points", []), thumb_path)
+            log("  Thumbnail: %s" % thumb_path)
+
+            # Bersihkan file sementara segmen (hemat disk).
+            for f in (seg, srt):
+                if f and os.path.isfile(f):
+                    os.remove(f)
+            return clip_path
+        except Exception as e:  # noqa: BLE001 - lanjut ke momen berikut
+            log("  GAGAL momen %d: %s" % (i, e))
+            return None
+
+    # ------------------------------------------------------------------
+    # Preview — render cepat (resolusi rendah) sebelum render penuh
+    # ------------------------------------------------------------------
+    def _klik_preview(self):
+        if self.sedang_jalan:
+            return
+        if not self.momen_list:
+            messagebox.showwarning("Belum ada momen",
+                                   "Klik 'Cari Momen' dulu.")
+            return
+        dipilih = [i for i, v in enumerate(self.momen_vars) if v.get()]
+        if not dipilih:
+            messagebox.showwarning("Tidak ada yang dicentang",
+                                   "Centang minimal 1 momen untuk di-preview.")
+            return
+        if not self._validasi_awal():
+            return
+        self._simpan_preferensi()
+        self.sedang_jalan = True
+        self.tombol_cari.configure(state="disabled")
+        self.tombol_preview.configure(state="disabled")
+        self.tombol_buat.configure(state="disabled")
+        self._set_status("Membuat preview (cepat, resolusi rendah)...")
+        threading.Thread(target=self._preview_thread, args=(dipilih[0],),
+                         daemon=True).start()
+
+    def _preview_thread(self, idx):
+        """Preview momen pertama yang dicentang, lalu buka di video player."""
+        log = self.log
+        try:
+            url = self.url_var.get().strip()
+            preset_nama = self.preset_var.get()
+            meta = self.meta_saat_ini or {}
+            slug = self.slug_saat_ini or slug_dari_judul(
+                meta.get("title") or "", meta.get("id") or "video")
+            if preset_nama == "Custom":
+                try:
+                    facecam = {k: float(v.get()) for k, (v, e) in self.custom_vars.items()}
+                except ValueError:
+                    raise ValueError("Koordinat Custom harus angka 0.0-1.0.")
+            else:
+                facecam = presets.get_preset(preset_nama)
+            out_dir = self.output_var.get().strip() or "output"
+            os.makedirs(out_dir, exist_ok=True)
+            tmp_dir = tempfile.mkdtemp(prefix="m3xclip_")
+            clip = self._proses_satu_momen(
+                idx, self.momen_list[idx], url, facecam, out_dir, tmp_dir, slug,
+                preview=True, log=log)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            if clip:
+                log("Preview jadi: %s — dibuka di video player." % clip)
+                self._set_status("Preview: %s" % clip)
+                self._buka_file(clip)
+            else:
+                self._set_status("Preview gagal — lihat log.")
+        except Exception as e:  # noqa: BLE001 - tampilkan ke user
+            log("BERHENTI: %s" % e)
+            self._set_status("Gagal: %s" % str(e)[:100])
+        finally:
+            self.sedang_jalan = False
+            self.tombol_cari.configure(state="normal")
+            if self.momen_list:
+                self.tombol_buat.configure(state="normal")
+                self.tombol_preview.configure(state="normal")
+
+    def _buka_file(self, path):
+        """Buka file video di player default sistem."""
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(path)  # noqa: S606 - path dari output user sendiri
+            elif sys.platform == "darwin":
+                subprocess.run(["open", path], check=False)
+            else:
+                subprocess.run(["xdg-open", path], check=False)
+        except Exception as e:  # noqa: BLE001 - preview tetap bisa dibuka manual
+            self.log("  (Tidak bisa membuka player otomatis: %s — buka manual: %s)"
+                     % (e, path))
 
 
 if __name__ == "__main__":
