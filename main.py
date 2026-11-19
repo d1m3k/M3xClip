@@ -1,9 +1,12 @@
-"""M3xClip v1.3 — GUI untuk membuat clip Reels/Shorts dari VOD YouTube.
+"""M3xClip v1.4 — GUI untuk membuat clip Reels/Shorts dari VOD YouTube.
 
 Alur kerja 2 langkah (rekomendasi dulu, baru potong):
   LANGKAH 1 — klik "Cari Momen": ambil metadata VOD lewat yt-dlp,
   lalu Gemini menonton video lewat URL-nya langsung dan menampilkan
   daftar rekomendasi momen (judul, jam mulai-selesai, durasi, alasan).
+  Atau KLIP MANUAL (tanpa Cari Momen, tanpa API key): isi durasi
+  mulai/selesai sendiri (MM:SS atau detik) + judul, klik "Tambah
+  sebagai momen" — momen itu masuk ke daftar yang sama.
   LANGKAH 2 — centang momen yang mau dipakai, atur edit tipis
   (ukuran subtitle, sound effect, stiker, trim mulai/selesai),
   klik "👁 Preview" untuk membuka Studio Preview: video preview di
@@ -106,8 +109,8 @@ def _format_waktu(detik):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("M3xClip — Clip Generator Reels/Shorts v1.3")
-        self.geometry("760x780")
+        self.title("M3xClip — Clip Generator Reels/Shorts v1.4")
+        self.geometry("760x840")
         self.resizable(True, True)
 
         self.cfg = load_config()
@@ -260,6 +263,35 @@ class App(tk.Tk):
         self.tombol_buat.grid(row=0, column=2, sticky="ew", padx=(4, 0))
         baris += 1
 
+        # --- Klip manual: isi durasi sendiri, tanpa Cari Momen (tanpa key) ---
+        frame_manual = ttk.LabelFrame(
+            self, text="Klip manual — isi durasi sendiri (tanpa Cari Momen, tanpa API key)")
+        frame_manual.grid(row=baris, column=0, columnspan=3,
+                          sticky="ew", padx=10, pady=(4, 0))
+        ttk.Label(frame_manual, text="Mulai").grid(
+            row=0, column=0, sticky="w", padx=(6, 2), pady=4)
+        self.manual_mulai_var = tk.StringVar(value="08:51")
+        ttk.Entry(frame_manual, textvariable=self.manual_mulai_var,
+                  width=10).grid(row=0, column=1, padx=2, pady=4)
+        ttk.Label(frame_manual, text="s.d.").grid(row=0, column=2, padx=2, pady=4)
+        self.manual_selesai_var = tk.StringVar(value="09:26")
+        ttk.Entry(frame_manual, textvariable=self.manual_selesai_var,
+                  width=10).grid(row=0, column=3, padx=2, pady=4)
+        ttk.Label(frame_manual, text="Judul (opsional)").grid(
+            row=0, column=4, sticky="w", padx=(8, 2), pady=4)
+        self.manual_judul_var = tk.StringVar()
+        ttk.Entry(frame_manual, textvariable=self.manual_judul_var,
+                  width=22).grid(row=0, column=5, padx=2, pady=4)
+        ttk.Button(frame_manual, text="＋ Tambah sebagai momen",
+                   command=self._tambah_momen_manual).grid(
+                       row=0, column=6, padx=(6, 4), pady=4)
+        ttk.Label(frame_manual,
+                  text="Format: MM:SS atau detik (mis. 08:51 atau 531). Durasi 5–180 detik. "
+                       "Momen manual ikut terhapus kalau Cari Momen dijalankan lagi.",
+                  foreground="gray").grid(row=1, column=0, columnspan=7,
+                                          sticky="w", padx=6, pady=(0, 4))
+        baris += 1
+
         ttk.Label(self, text="Momen yang ditemukan (centang yang mau dibuat clip):").grid(
             row=baris, column=0, columnspan=3, sticky="w", padx=10)
         baris += 1
@@ -393,12 +425,13 @@ class App(tk.Tk):
             "stiker_mode": self.stiker_var.get(),
         })
 
-    def _validasi_awal(self):
-        """Cek URL + key sebelum jalan. Kembalikan False kalau belum lengkap."""
+    def _validasi_awal(self, butuh_key=True):
+        """Cek URL + key sebelum jalan. Kembalikan False kalau belum lengkap.
+        Klip manual & Preview tidak butuh key (butuh_key=False)."""
         if not self.url_var.get().strip():
             messagebox.showwarning("URL kosong", "Isi URL YouTube dulu.")
             return False
-        if not self.key_var.get().strip():
+        if butuh_key and not self.key_var.get().strip():
             messagebox.showwarning(
                 "API key kosong",
                 "Isi API key Gemini dulu (dibuat di Google AI Studio).\n"
@@ -469,35 +502,115 @@ class App(tk.Tk):
         self.momen_vars = []
         self.momen_trim = []
         for m in momen:
-            var = tk.BooleanVar(value=True)
-            self.momen_vars.append(var)
-            judul = "%s–%s  •  %d dtk  •  %s" % (
-                _format_waktu(m["start_sec"]), _format_waktu(m["end_sec"]),
-                m["end_sec"] - m["start_sec"],
-                m.get("title_id") or "(tanpa judul)")
-            cb = tk.Checkbutton(self.frame_momen, text=judul, variable=var,
-                                anchor="w", justify="left", wraplength=700)
-            cb.pack(anchor="w", padx=6, pady=(6, 0))
-            alasan = (m.get("alasan") or "").strip()
-            if alasan:
-                ttk.Label(self.frame_momen, text="      " + alasan,
-                          foreground="gray", wraplength=700,
-                          justify="left").pack(anchor="w", padx=6)
-            # Trim tipis: geser mulai/selesai momen (detik).
-            frame_trim = ttk.Frame(self.frame_momen)
-            frame_trim.pack(anchor="w", padx=6)
-            ttk.Label(frame_trim, text="      trim: mulai").pack(side="left")
-            var_mulai = tk.IntVar(value=m["start_sec"])
-            ttk.Spinbox(frame_trim, from_=0, to=99999,
-                        textvariable=var_mulai, width=6).pack(side="left", padx=2)
-            ttk.Label(frame_trim, text="s.d.").pack(side="left")
-            var_selesai = tk.IntVar(value=m["end_sec"])
-            ttk.Spinbox(frame_trim, from_=1, to=99999,
-                        textvariable=var_selesai, width=6).pack(side="left", padx=2)
-            ttk.Label(frame_trim, text="dtk").pack(side="left")
-            self.momen_trim.append((var_mulai, var_selesai))
+            self._tambah_baris_momen(m)
         self.tombol_buat.configure(state="normal")
         self.tombol_preview.configure(state="normal")
+
+    def _tambah_baris_momen(self, m):
+        """Tambah 1 baris momen (checkbox + alasan + trim) ke daftar."""
+        var = tk.BooleanVar(value=True)
+        self.momen_vars.append(var)
+        judul = "%s–%s  •  %d dtk  •  %s" % (
+            _format_waktu(m["start_sec"]), _format_waktu(m["end_sec"]),
+            m["end_sec"] - m["start_sec"],
+            m.get("title_id") or "(tanpa judul)")
+        cb = tk.Checkbutton(self.frame_momen, text=judul, variable=var,
+                            anchor="w", justify="left", wraplength=700)
+        cb.pack(anchor="w", padx=6, pady=(6, 0))
+        alasan = (m.get("alasan") or "").strip()
+        if alasan:
+            ttk.Label(self.frame_momen, text="      " + alasan,
+                      foreground="gray", wraplength=700,
+                      justify="left").pack(anchor="w", padx=6)
+        # Trim tipis: geser mulai/selesai momen (detik).
+        frame_trim = ttk.Frame(self.frame_momen)
+        frame_trim.pack(anchor="w", padx=6)
+        ttk.Label(frame_trim, text="      trim: mulai").pack(side="left")
+        var_mulai = tk.IntVar(value=m["start_sec"])
+        ttk.Spinbox(frame_trim, from_=0, to=99999,
+                    textvariable=var_mulai, width=6).pack(side="left", padx=2)
+        ttk.Label(frame_trim, text="s.d.").pack(side="left")
+        var_selesai = tk.IntVar(value=m["end_sec"])
+        ttk.Spinbox(frame_trim, from_=1, to=99999,
+                    textvariable=var_selesai, width=6).pack(side="left", padx=2)
+        ttk.Label(frame_trim, text="dtk").pack(side="left")
+        self.momen_trim.append((var_mulai, var_selesai))
+
+    # ------------------------------------------------------------------
+    # Klip manual — isi durasi sendiri, tanpa Cari Momen
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_waktu(teks):
+        """Parse durasi: 'MM:SS', 'HH:MM:SS', atau detik ('531').
+        Kembalikan detik (int). ValueError kalau formatnya salah."""
+        teks = (teks or "").strip()
+        if not teks:
+            raise ValueError("durasi kosong")
+        if ":" in teks:
+            bagian = teks.split(":")
+            if len(bagian) not in (2, 3) or not all(
+                    b.strip().isdigit() for b in bagian):
+                raise ValueError("format waktu salah: %s" % teks)
+            angka = [int(b) for b in bagian]
+            if len(angka) == 2:
+                menit, detik = angka
+                if menit < 0 or detik < 0 or detik >= 60:
+                    raise ValueError("menit/detik tidak masuk akal: %s" % teks)
+                return menit * 60 + detik
+            jam, menit, detik = angka
+            if jam < 0 or menit < 0 or detik < 0 or menit >= 60 or detik >= 60:
+                raise ValueError("jam/menit/detik tidak masuk akal: %s" % teks)
+            return jam * 3600 + menit * 60 + detik
+        if not teks.isdigit():
+            raise ValueError("format waktu salah: %s" % teks)
+        return int(teks)
+
+    def _tambah_momen_manual(self):
+        """Tambah momen dari durasi yang diisi manual ke daftar momen."""
+        if not self.url_var.get().strip():
+            messagebox.showwarning("URL kosong", "Isi URL YouTube dulu.")
+            return
+        try:
+            mulai = self._parse_waktu(self.manual_mulai_var.get())
+            selesai = self._parse_waktu(self.manual_selesai_var.get())
+        except ValueError as e:
+            messagebox.showwarning("Durasi salah", str(e) +
+                                   "\nFormat: MM:SS atau detik, mis. 08:51 atau 531.")
+            return
+        if selesai <= mulai:
+            messagebox.showwarning("Durasi salah",
+                                   "Waktu selesai harus lebih besar dari waktu mulai.")
+            return
+        durasi = selesai - mulai
+        if durasi < 5:
+            messagebox.showwarning("Durasi salah",
+                                   "Durasi minimal 5 detik (saat ini %d detik)." % durasi)
+            return
+        if durasi > 180:
+            messagebox.showwarning(
+                "Durasi salah",
+                "Durasi maksimal 180 detik (3 menit, batas YouTube Shorts) — "
+                "saat ini %d detik. Potong jadi beberapa momen." % durasi)
+            return
+        judul = self.manual_judul_var.get().strip()
+        if not judul:
+            judul = "Klip manual %s–%s" % (_format_waktu(mulai),
+                                           _format_waktu(selesai))
+        m = {"start_sec": mulai, "end_sec": selesai, "title_id": judul,
+             "hook": judul, "points": [],
+             "thumbnail_frame_sec": mulai + 2,
+             "alasan": "Momen manual — durasi dimasukkan sendiri.",
+             "manual": True}
+        if not self.momen_list:
+            for w in self.frame_momen.winfo_children():
+                w.destroy()
+        self.momen_list.append(m)
+        self._tambah_baris_momen(m)
+        self.tombol_buat.configure(state="normal")
+        self.tombol_preview.configure(state="normal")
+        self.log("Momen manual ditambah: %s (%d–%d detik) — centang lalu "
+                 "klik Preview atau Buat Clip." % (judul, mulai, selesai))
+        self._set_status("Momen manual ditambah: %s" % judul)
 
     # ------------------------------------------------------------------
     # LANGKAH 2 — Buat clip dari momen yang dicentang
@@ -514,7 +627,10 @@ class App(tk.Tk):
             messagebox.showwarning("Tidak ada yang dicentang",
                                    "Centang minimal 1 momen yang mau dibuat clip.")
             return
-        if not self._validasi_awal():
+        # Key Gemini cuma butuh kalau ada momen hasil Cari Momen yang dipilih;
+        # momen manual murni tidak butuh key.
+        butuh_key = any(not self.momen_list[i].get("manual") for i in dipilih)
+        if not self._validasi_awal(butuh_key=butuh_key):
             return
         self._simpan_preferensi()
         self.sedang_jalan = True
@@ -536,7 +652,14 @@ class App(tk.Tk):
         try:
             url = self.url_var.get().strip()
             preset_nama = self.preset_var.get()
+            # Kalau belum pernah Cari Momen (aliran klip manual murni),
+            # ambil metadata dulu supaya nama file clip pakai judul video.
             meta = self.meta_saat_ini or {}
+            if not meta:
+                meta = downloader.get_metadata(url, log=log)
+                self.meta_saat_ini = meta
+                self.slug_saat_ini = slug_dari_judul(
+                    meta.get("title") or "", meta.get("id") or "video")
             slug = self.slug_saat_ini or slug_dari_judul(
                 meta.get("title") or "", meta.get("id") or "video")
 
@@ -666,7 +789,8 @@ class App(tk.Tk):
             assembler.extract_frame(seg, frame_dtk, frame_path)
             thumb_path = os.path.join(out_dir, "%s_thumb%d.jpg" % (slug, i))
             thumbnail.make_thumbnail(
-                frame_path, m.get("hook", ""), m.get("points", []), thumb_path)
+                frame_path, m.get("hook") or m.get("title_id") or "",
+                m.get("points", []), thumb_path)
             log("  Thumbnail: %s" % thumb_path)
 
             # Bersihkan file sementara segmen (hemat disk).
@@ -697,7 +821,8 @@ class App(tk.Tk):
             messagebox.showwarning("Tidak ada yang dicentang",
                                    "Centang minimal 1 momen untuk di-preview.")
             return
-        if not self._validasi_awal():
+        # Studio Preview tidak memakai Gemini — tidak butuh API key.
+        if not self._validasi_awal(butuh_key=False):
             return
         self._simpan_preferensi()
         self.sedang_jalan = True

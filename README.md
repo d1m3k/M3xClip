@@ -78,6 +78,13 @@ Kalau tidak ada, .exe tetap jalan asal ffmpeg terinstall di PATH.
 5. Pilih **folder output**, klik **🔍 Cari Momen** — Gemini menonton video
    lalu menampilkan daftar rekomendasi (judul, jam mulai–selesai, durasi,
    alasan). **Centang** momen yang mau dipakai.
+   **Klip manual (v1.4, alternatif tanpa Gemini/API key):** kalau kamu
+   sudah tahu mau potong jam berapa, isi **Mulai** + **Selesai** di kotak
+   "Klip manual" (format MM:SS atau detik, mis. 08:51–09:26) + **Judul**,
+   klik **＋ Tambah sebagai momen** — momen itu masuk ke daftar yang
+   sama, bisa di-preview di Studio atau langsung dibuat clip. Durasi
+   5–180 detik (batas YouTube Shorts). Momen manual ikut terhapus kalau
+   Cari Momen dijalankan lagi.
 6. **Edit tipis** (sebelum render): atur ukuran subtitle (Kecil/Sedang/Besar),
    Sound (Mati/Minimal/Ramai) dan Stiker (Mati/Otomatis); geser trim
    mulai/selesai tiap momen kalau mau.
